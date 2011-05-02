@@ -22,7 +22,7 @@ library("MCMCpack")
 
 
 ### Note: assume additive model
-dplikelihood <- function(gt) 
+dplikelihood <- function(gt, prevalence = 0.01, parpervar = 0.03) 
 {
 	# gt <- read.table(genotable, sep="\t", header=F)
 	# ## attach(gt)
@@ -36,37 +36,59 @@ dplikelihood <- function(gt)
 	# initial condition
 	numVar = nrow(gt)
 	
-	p = matrix(rep(1,(numVar+1)*(numVar+2)), nrow=numVar+2, ncol=numVar+1)
+	p = matrix(rep(0,(numVar+1)*(numVar+2)), nrow=numVar+2, ncol=numVar+1)
 	lratio = rep(0,numVar)
 	# loop through variants
-	p[1,] = 0 ## p(-1,) = 0
+    p[2,1] = 1 ## p(-1,) = 0
+	#p[3:(numVar+2),1] = 0
+ 	#p[1,1]=0
+ 	
+ 	epar = 0
 	for (v in 1:numVar) 
 	{
+		l0 = pnull(as.numeric(gt[v,3:6])) 
+		ralter = palter(as.numeric(gt[v,3:6])) 
+		l1 = ralter[1]
+		epar = epar + ralter[2]
+			
 		vindex = v + 1
 		for (d in 0:v) 
 		{	
 			dindex = d + 2 
 			## print(d)
-			l0 = pnull(as.numeric(gt[v,3:6])) 
-			l1 = palter(as.numeric(gt[v,3:6])) 
-			
+
 			p[dindex, vindex]=p[dindex - 1, vindex -1]*l1 + p[dindex,vindex-1]*l0			
-			
+
 		}
 	}
 	
 	## p[,numVar+2] is the final likelihood of each v
 
-	## maximum likelihood ratio:
+	expectedD = epar / parpervar
+	## Poisson distribution as prior of D
+#	print(p[,numVar+1])
+	alterlikelihood = 0
+	totaldensity = 0
 	for (d in 1:numVar)
 	{	dindex = d + 2
 		lratio[d] = p[dindex, numVar+1] / p[2 ,numVar +1]
+		pdensity = dpois(d,expectedD)
+		alterlikelihood = alterlikelihood + p[dindex, numVar+1] * pdensity
+		totaldensity = totaldensity + pdensity
 	}
-	print(lratio)
-	### compute the posterior probability of data under alternative hypothesis (d>0)
+	alterlikelihood = alterlikelihood / totaldensity
 	
+	bf = alterlikelihood / p[ 2 ,numVar + 1 ]
+	
+#	print(lratio)
+	### compute the posterior probability of data under alternative hypothesis (d>0)
 
+#	print(epar)
+#	lratio
 }
+
+
+
 
 pnull <- function(gvector)
 {
@@ -89,6 +111,13 @@ palter <- function(gvector)
  	### genotypes . 
 
 	freq = (gvector[1] + gvector[2]) / (gvector[3] + gvector[4])	##combined frequency in cases and controls
+	
+	### estimate MAF. using 0.1 adjustment for c0 = 0; 
+	## alternatively, when c0=0, we can use posterior expection of MAF given 
+	## c1: set c1/n1 as the mean of prior binomial, then estimate expected MAF
+	## of c0 given observed c0/n0.
+	maf = (gvector[2]+0.5)/(gvector[4]+0.5)
+	
 	tao = 1/(freq * (1-freq))^0.5 / c
 
 	# only calculate approximate posterior likelihood.	
@@ -96,26 +125,40 @@ palter <- function(gvector)
 	# orarray = exp(rnorm(100000, 0, t))
 	## alternatively, we can use Laplace technique to estimate
 	
-	binmax = 10 * tao
-	binmin = -10 * tao
-	bins = 500
+	binmax = 5 * tao
+	binmin = -5 * tao
+	bins = 200
 	barray = c(0:bins) * (binmax - binmin)/bins + binmin
 	density = dnorm(barray, 0, tao)
 	totalp = 0
+	
+	### estimate par based on priors
+	##	par = 1/[ 1 + 1/(maf * (OR-1)) ]
+	
+	tpar = 0
 	for (i in 1:length(barray))
 	{
 		or = exp(barray[i])
 		lh = dnoncenhypergeom(gvector[1], gvector[3], gvector[4], gvector[1]+gvector[2],or)
 		totalp = totalp + lh * density[i]
+		
+		if (or < 1) {
+			or = 1/or  ### flip for PAR calculation
+		}
+		tpar = tpar +  1 / (1 + 1/(or - 1)/maf)  * density[i]
+		
 	}	
 
 ##	totalp = totalp - dnoncenhypergeom(gvector[1], gvector[3], gvector[4], gvector[1]+gvector[2],1) * dnorm(0,0,tao)
 
 	totalp = totalp / sum(density)   
-	
+	tpar = tpar / sum(density)
 		
-	totalp
+	c(totalp,tpar)
 
 }
 
-
+args <- commandArgs(TRUE)
+genotable <- args[1]
+gt =  read.table(genotable,  header=F)
+print(dplikelihood(gt))
